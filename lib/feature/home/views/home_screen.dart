@@ -14,26 +14,16 @@ class HomeScreen extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  buildHeaderButton(icon: Icons.menu_rounded, onTap: () {}),
-
-                  const Text(
-                    'Hello!',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF212121),
-                      letterSpacing: 0.5,
-                    ),
+              child: Center(
+                child: const Text(
+                  'Hello!',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF212121),
+                    letterSpacing: 0.5,
                   ),
-
-                  buildHeaderButton(
-                    icon: Icons.settings_outlined,
-                    onTap: () {},
-                  ),
-                ],
+                ),
               ),
             ),
 
@@ -95,32 +85,6 @@ class HomeScreen extends StatelessWidget {
         ),
       ),
       bottomNavigationBar: buildBottomNavBar(),
-    );
-  }
-
-  Widget buildHeaderButton({
-    required IconData icon,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Icon(icon, size: 22, color: const Color(0xFF212121)),
-      ),
     );
   }
 

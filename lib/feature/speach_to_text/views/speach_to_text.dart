@@ -19,7 +19,9 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
   late stt.SpeechToText speech;
   bool isListening = false;
   bool isInitialized = false;
-  String recognizedText = '';
+  bool keepListening = false;
+  String fullText = '';
+  String currentSegment = '';
   String selectedLanguage = 'en-US';
 
   late AnimationController _pulseController;
@@ -45,8 +47,24 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
     final status = await Permission.microphone.request();
     if (status.isGranted) {
       bool available = await speech.initialize(
-        onError: (error) => debugPrint('Speech error: $error'),
-        onStatus: (status) => debugPrint('Speech status: $status'),
+        onError: (error) {
+          debugPrint('Speech error: $error');
+          if (keepListening && mounted) {
+            Future.delayed(
+              const Duration(milliseconds: 500),
+              _restartListening,
+            );
+          }
+        },
+        onStatus: (status) {
+          debugPrint('Speech status: $status');
+          if (status == 'notListening' && keepListening && mounted) {
+            Future.delayed(
+              const Duration(milliseconds: 500),
+              _restartListening,
+            );
+          }
+        },
       );
       if (mounted) {
         setState(() => isInitialized = available);
@@ -84,40 +102,106 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
     );
   }
 
-  Future<void> _startListening() async {
+  Future<void> _toggleListening() async {
+    if (isListening) {
+      await _stopListening();
+    } else {
+      await startListening();
+    }
+  }
+
+  Future<void> startListening() async {
     if (!isInitialized) {
       await _initializeSpeech();
       if (!isInitialized) return;
     }
 
     setState(() {
-      recognizedText = '';
       isListening = true;
+      keepListening = true;
     });
 
-    await speech.listen(
-      onResult: (result) {
-        if (mounted) {
+    await _beginListening();
+  }
+
+  Future<void> _beginListening() async {
+    if (!keepListening || !mounted) return;
+
+    try {
+      await speech.listen(
+        onResult: (result) {
+          if (!mounted) return;
+
           setState(() {
-            recognizedText = result.recognizedWords;
+            currentSegment = result.recognizedWords;
+
+            if (result.finalResult && currentSegment.isNotEmpty) {
+              if (fullText.isEmpty) {
+                fullText = currentSegment;
+              } else {
+                fullText = '$fullText $currentSegment';
+              }
+              currentSegment = '';
+            }
           });
-        }
-      },
-      localeId: selectedLanguage,
-      listenFor: const Duration(seconds: 30),
-      pauseFor: const Duration(seconds: 3),
-    );
+        },
+        localeId: selectedLanguage,
+        listenFor: const Duration(seconds: 30),
+        pauseFor: const Duration(seconds: 5),
+        partialResults: true,
+        onSoundLevelChange: (level) {},
+        cancelOnError: false,
+        listenMode: stt.ListenMode.dictation,
+      );
+    } catch (e) {
+      debugPrint('Listen error: $e');
+      if (keepListening && mounted) {
+        Future.delayed(const Duration(milliseconds: 500), _restartListening);
+      }
+    }
+  }
+
+  Future<void> _restartListening() async {
+    if (!keepListening || !mounted) return;
+
+    try {
+      await speech.stop();
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      if (keepListening && mounted) {
+        await _beginListening();
+      }
+    } catch (e) {
+      debugPrint('Restart error: $e');
+    }
   }
 
   Future<void> _stopListening() async {
+    setState(() {
+      keepListening = false;
+      isListening = false;
+    });
+
     await speech.stop();
+
     if (mounted) {
-      setState(() => isListening = false);
+      final finalText = fullText.isEmpty
+          ? currentSegment
+          : currentSegment.isEmpty
+          ? fullText
+          : '$fullText $currentSegment';
 
-      if (recognizedText.isNotEmpty) {
-        final wordCount = recognizedText.split(' ').length;
-
+      if (finalText.isNotEmpty) {
+        final wordCount = finalText
+            .split(' ')
+            .where((w) => w.isNotEmpty)
+            .length;
         context.read<StatsProvider>().updateFromSpeechToText(wordCount);
+
+        setState(() {
+          fullText = finalText;
+          currentSegment = '';
+        });
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -141,8 +225,16 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
     }
   }
 
+  Future<void> _clearText() async {
+    setState(() {
+      fullText = '';
+      currentSegment = '';
+    });
+  }
+
   @override
   void dispose() {
+    keepListening = false;
     _pulseController.dispose();
     speech.stop();
     super.dispose();
@@ -150,6 +242,12 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
 
   @override
   Widget build(BuildContext context) {
+    final displayText = fullText.isEmpty
+        ? currentSegment
+        : currentSegment.isEmpty
+        ? fullText
+        : '$fullText $currentSegment';
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
@@ -159,24 +257,23 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
             _buildLanguageToggle(),
             SizedBox(height: 40.h),
 
-            // Fixed: Wrapped content in Expanded to prevent overflow
             Expanded(
               child: SingleChildScrollView(
                 child: Padding(
                   padding: EdgeInsets.symmetric(horizontal: 20.w),
                   child: Column(
                     children: [
-                      if (!isListening && recognizedText.isEmpty)
+                      if (!isListening && displayText.isEmpty)
                         _buildInitialState()
                       else
-                        _buildRecognitionState(),
+                        buildRecognitionState(displayText),
                     ],
                   ),
                 ),
               ),
             ),
 
-            _buildMicButton(),
+            buildControlButtons(),
             SizedBox(height: 40.h),
           ],
         ),
@@ -256,7 +353,7 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
     VoidCallback onTap,
   ) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: isListening ? null : onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: EdgeInsets.symmetric(vertical: 12.h),
@@ -297,7 +394,7 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
         ),
         SizedBox(height: 40.h),
         Text(
-          'Tap the microphone',
+          'Tap to Start Recording',
           style: TextStyle(
             fontSize: 20.sp,
             fontWeight: FontWeight.bold,
@@ -306,22 +403,49 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
         ),
         SizedBox(height: 12.h),
         Text(
-          'Start speaking and I\'ll write it down',
-          style: TextStyle(fontSize: 14.sp, color: Colors.grey[600]),
+          'Speak clearly into your microphone\nPress stop when you\'re done',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 14.sp,
+            color: Colors.grey[600],
+            height: 1.5,
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildRecognitionState() {
+  Widget buildRecognitionState(String displayText) {
     return Column(
       children: [
         SizedBox(height: 20.h),
-        Text(
-          'What I heard:',
-          style: TextStyle(fontSize: 14.sp, color: Colors.grey[600]),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Transcript:',
+              style: TextStyle(
+                fontSize: 14.sp,
+                color: Colors.grey[600],
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (displayText.isNotEmpty && !isListening)
+              TextButton.icon(
+                onPressed: _clearText,
+                icon: Icon(Icons.clear, size: 16.sp),
+                label: const Text('Clear'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.red[400],
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 12.w,
+                    vertical: 6.h,
+                  ),
+                ),
+              ),
+          ],
         ),
-        SizedBox(height: 20.h),
+        SizedBox(height: 12.h),
         Container(
           width: double.infinity,
           padding: EdgeInsets.all(24.w),
@@ -332,12 +456,10 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
           ),
           constraints: BoxConstraints(minHeight: 150.h),
           child: Text(
-            recognizedText.isEmpty
-                ? 'Your text will appear here...'
-                : recognizedText,
+            displayText.isEmpty ? 'Start speaking...' : displayText,
             style: TextStyle(
               fontSize: 16.sp,
-              color: recognizedText.isEmpty
+              color: displayText.isEmpty
                   ? Colors.grey[400]
                   : const Color(0xFF212121),
               height: 1.5,
@@ -346,64 +468,98 @@ class _SpeechToTextScreenState extends State<SpeechToTextScreen>
         ),
         if (isListening) ...[
           SizedBox(height: 20.h),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.circle, size: 8.sp, color: Colors.red[400]),
-              SizedBox(width: 8.w),
-              Text(
-                'Listening...',
-                style: TextStyle(
-                  fontSize: 14.sp,
-                  color: Colors.red[400],
-                  fontWeight: FontWeight.w500,
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+            decoration: BoxDecoration(
+              color: Colors.red[50],
+              borderRadius: BorderRadius.circular(20.r),
+              border: Border.all(color: Colors.red[200]!),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.circle, size: 8.sp, color: Colors.red[400]),
+                SizedBox(width: 8.w),
+                Text(
+                  'Listening... Speak now',
+                  style: TextStyle(
+                    fontSize: 14.sp,
+                    color: Colors.red[700],
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
+          ),
+        ],
+        if (!isListening && displayText.isNotEmpty) ...[
+          SizedBox(height: 20.h),
+          Text(
+            'Word count: ${displayText.split(' ').where((w) => w.isNotEmpty).length}',
+            style: TextStyle(
+              fontSize: 14.sp,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ],
       ],
     );
   }
 
-  Widget _buildMicButton() {
+  Widget buildControlButtons() {
     return Center(
-      child: GestureDetector(
-        onTap: isListening ? _stopListening : _startListening,
-        child: AnimatedBuilder(
-          animation: isListening
-              ? pulseAnimation
-              : const AlwaysStoppedAnimation(1.0),
-          builder: (context, child) {
-            return Transform.scale(
-              scale: isListening ? pulseAnimation.value : 1.0,
-              child: Container(
-                width: 80.w,
-                height: 80.h,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isListening
-                      ? Colors.red[400]
-                      : const Color(0xFF4CAF50),
-                  boxShadow: [
-                    BoxShadow(
-                      color:
-                          (isListening ? Colors.red : const Color(0xFF4CAF50))
-                              .withOpacity(0.3),
-                      blurRadius: 20,
-                      spreadRadius: 5,
+      child: Column(
+        children: [
+          GestureDetector(
+            onTap: _toggleListening,
+            child: AnimatedBuilder(
+              animation: isListening
+                  ? pulseAnimation
+                  : const AlwaysStoppedAnimation(1.0),
+              builder: (context, child) {
+                return Transform.scale(
+                  scale: isListening ? pulseAnimation.value : 1.0,
+                  child: Container(
+                    width: 80.w,
+                    height: 80.h,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isListening
+                          ? Colors.red[400]
+                          : const Color(0xFF4CAF50),
+                      boxShadow: [
+                        BoxShadow(
+                          color:
+                              (isListening
+                                      ? Colors.red
+                                      : const Color(0xFF4CAF50))
+                                  .withOpacity(0.3),
+                          blurRadius: 20,
+                          spreadRadius: 5,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                child: Icon(
-                  isListening ? Icons.stop_rounded : Icons.mic_rounded,
-                  color: Colors.white,
-                  size: 36.sp,
-                ),
-              ),
-            );
-          },
-        ),
+                    child: Icon(
+                      isListening ? Icons.stop_rounded : Icons.mic_rounded,
+                      color: Colors.white,
+                      size: 36.sp,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          SizedBox(height: 12.h),
+          Text(
+            isListening ? 'Tap to Stop' : 'Tap to Start',
+            style: TextStyle(
+              fontSize: 14.sp,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
       ),
     );
   }

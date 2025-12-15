@@ -15,11 +15,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int currentIndex = 0;
 
-  final List<Widget> screens = const [
-    HomeScreen(),
-    HistoryScreen(),
-    ProfileScreen(),
-  ];
+  final List<Widget> screens = const [HomeScreen(), ProfileScreen()];
 
   @override
   Widget build(BuildContext context) {
@@ -61,16 +57,7 @@ class _MainScreenState extends State<MainScreen> {
               ),
               label: "Home",
             ),
-            BottomNavigationBarItem(
-              icon: Padding(
-                padding: EdgeInsets.only(bottom: 4.h),
-                child: Icon(
-                  currentIndex == 1 ? Icons.history : Icons.history_outlined,
-                  size: 28.sp,
-                ),
-              ),
-              label: "History",
-            ),
+
             BottomNavigationBarItem(
               icon: Padding(
                 padding: EdgeInsets.only(bottom: 4.h),
